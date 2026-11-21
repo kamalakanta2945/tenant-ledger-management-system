@@ -1,0 +1,9 @@
+- Ledger entries store signed integer cents; API amounts are validated as `Decimal`.
+- Each transaction writes its ledger postings and audit event in one database transaction.
+- Client identifiers and idempotency keys are unique within a tenant.
+- Composite foreign keys prevent postings from linking records across tenants.
+- `X-Tenant-ID` must be authenticated and authorized by a trusted upstream in production.
+- Audit events are protected from updates and deletes by SQLite triggers.
+- Transfers create equal-and-opposite postings; reversals append opposite postings.
+- Bulk rows run in savepoints so a rejected row does not discard successful rows.
+- Monthly reports include posted activity, including reversals, for the selected UTC month.
