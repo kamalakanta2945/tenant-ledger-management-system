@@ -1,10 +1,13 @@
+from datetime import date
 from datetime import datetime, timezone
 from enum import StrEnum
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -30,14 +33,13 @@ class TransactionType(StrEnum):
 class Client(Base):
     __tablename__ = "clients"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "external_id", name="uq_client_tenant_external_id"),
+        UniqueConstraint("tenant_id", "client_ref", name="uq_client_tenant_ref"),
         UniqueConstraint("tenant_id", "id", name="uq_client_tenant_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    external_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    client_ref: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 class LedgerTransaction(Base):
@@ -45,7 +47,15 @@ class LedgerTransaction(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_transaction_tenant_idempotency"),
         UniqueConstraint("tenant_id", "id", name="uq_transaction_tenant_id"),
+        UniqueConstraint("tenant_id", "id", "currency", name="uq_transaction_tenant_currency"),
         UniqueConstraint("tenant_id", "reversal_of_id", name="uq_transaction_one_reversal"),
+        Index(
+            "ix_transactions_tenant_currency_date",
+            "tenant_id",
+            "currency",
+            "transaction_date",
+        ),
+        Index("ix_transactions_tenant_created_id", "tenant_id", "created_at", "id"),
         ForeignKeyConstraint(
             ["tenant_id", "client_id"], ["clients.tenant_id", "clients.id"], ondelete="RESTRICT"
         ),
@@ -60,6 +70,10 @@ class LedgerTransaction(Base):
         ),
         CheckConstraint("amount_cents > 0", name="ck_transaction_positive_amount"),
         CheckConstraint(
+            "currency IN ('USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'NZD', 'SGD')",
+            name="ck_transaction_supported_currency",
+        ),
+        CheckConstraint(
             "type != 'transfer' OR (source_client_id IS NOT NULL AND destination_client_id IS NOT NULL "
             "AND source_client_id != destination_client_id)",
             name="ck_transfer_clients",
@@ -70,22 +84,29 @@ class LedgerTransaction(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(20), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     client_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_client_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     destination_client_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reversal_of_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
     __table_args__ = (
         CheckConstraint("amount_cents != 0", name="ck_entry_nonzero_amount"),
+        CheckConstraint(
+            "currency IN ('USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'NZD', 'SGD')",
+            name="ck_entry_supported_currency",
+        ),
         UniqueConstraint("transaction_id", "client_id", name="uq_entry_transaction_client"),
+        Index("ix_entries_tenant_client_currency", "tenant_id", "client_id", "currency"),
         ForeignKeyConstraint(
-            ["tenant_id", "transaction_id"],
-            ["transactions.tenant_id", "transactions.id"],
+            ["tenant_id", "transaction_id", "currency"],
+            ["transactions.tenant_id", "transactions.id", "transactions.currency"],
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -97,6 +118,7 @@ class LedgerEntry(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     transaction_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     client_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
 
 class AuditEvent(Base):
@@ -113,5 +135,6 @@ class AuditEvent(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     transaction_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     action: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(128), nullable=False)
     details: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

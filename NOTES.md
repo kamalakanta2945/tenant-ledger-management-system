@@ -1,9 +1,10 @@
-- Ledger entries store signed integer cents; API amounts are validated as `Decimal`.
-- Each transaction writes its ledger postings and audit event in one database transaction.
-- Client identifiers and idempotency keys are unique within a tenant.
-- Composite foreign keys prevent postings from linking records across tenants.
-- `X-Tenant-ID` must be authenticated and authorized by a trusted upstream in production.
-- Audit events are protected from updates and deletes by SQLite triggers.
-- Transfers create equal-and-opposite postings; reversals append opposite postings.
-- Bulk rows run in savepoints so a rejected row does not discard successful rows.
-- Monthly reports include posted activity, including reversals, for the selected UTC month.
+- Client API uses tenant-scoped opaque references; names are not stored or returned.
+- Money uses Decimal input and integer cents; supported currencies: USD, EUR, GBP, CAD, AUD, CHF, NZD, SGD.
+- Effective transaction dates are separate from creation timestamps; future dates are rejected.
+- Balances include reversals; monthly reports use effective dates and are scoped by tenant and currency.
+- Unique idempotency keys, composite tenant foreign keys, append-only audit events, and row-level import results are enforced.
+- SQLite writes use BEGIN IMMEDIATE and overdraft triggers; SQLite still serializes writers and may bottleneck at 100x load.
+- X-Tenant-ID and X-Actor-ID are untrusted demo headers; authentication and authorization are not implemented.
+- No FX conversion, currencies with other than two minor-unit digits, or production authentication is included.
+- A startup migration renames external_id, removes names, and backfills USD/effective dates in prior SQLite databases.
+- For higher write throughput or distributed deployment, add managed migrations and move to PostgreSQL with authenticated tenant context.

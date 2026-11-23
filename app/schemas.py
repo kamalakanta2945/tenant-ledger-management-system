@@ -1,4 +1,6 @@
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -8,24 +10,36 @@ from app.models import TransactionType
 MAX_AMOUNT = Decimal("92233720368547758.07")
 
 
+class Currency(StrEnum):
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+    CAD = "CAD"
+    AUD = "AUD"
+    CHF = "CHF"
+    NZD = "NZD"
+    SGD = "SGD"
+
+
 class ClientCreate(BaseModel):
-    external_id: str = Field(min_length=1, max_length=128)
-    name: str = Field(min_length=1, max_length=200)
+    client_ref: str = Field(min_length=1, max_length=128)
 
 
-class ClientRead(ClientCreate):
+class ClientRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: int
+    client_ref: str
 
 
 class TransactionCreate(BaseModel):
     type: TransactionType
     amount: Decimal
     idempotency_key: str = Field(min_length=1, max_length=128)
-    client_id: int | None = None
-    source_client_id: int | None = None
-    destination_client_id: int | None = None
+    currency: Currency = Currency.USD
+    transaction_date: date | None = None
+    client_ref: str | None = Field(default=None, min_length=1, max_length=128)
+    source_client_ref: str | None = Field(default=None, min_length=1, max_length=128)
+    destination_client_ref: str | None = Field(default=None, min_length=1, max_length=128)
     note: str | None = Field(default=None, max_length=2000)
 
     @field_validator("amount")
@@ -39,15 +53,30 @@ class TransactionCreate(BaseModel):
             raise ValueError("amount must have no more than two decimal places")
         return value
 
+    @field_validator("transaction_date")
+    @classmethod
+    def transaction_date_cannot_be_future(cls, value: date | None) -> date | None:
+        if value is not None and value > datetime.now(timezone.utc).date():
+            raise ValueError("transaction_date cannot be in the future")
+        return value
+
     @model_validator(mode="after")
     def validate_transaction_parties(self) -> Self:
         if self.type in (TransactionType.DEPOSIT, TransactionType.WITHDRAWAL, TransactionType.FEE):
-            if self.client_id is None or self.source_client_id is not None or self.destination_client_id is not None:
-                raise ValueError("deposit, withdrawal, and fee require only client_id")
+            if (
+                self.client_ref is None
+                or self.source_client_ref is not None
+                or self.destination_client_ref is not None
+            ):
+                raise ValueError("deposit, withdrawal, and fee require only client_ref")
         elif self.type == TransactionType.TRANSFER:
-            if self.client_id is not None or self.source_client_id is None or self.destination_client_id is None:
-                raise ValueError("transfer requires source_client_id and destination_client_id only")
-            if self.source_client_id == self.destination_client_id:
+            if (
+                self.client_ref is not None
+                or self.source_client_ref is None
+                or self.destination_client_ref is None
+            ):
+                raise ValueError("transfer requires source_client_ref and destination_client_ref only")
+            if self.source_client_ref == self.destination_client_ref:
                 raise ValueError("transfer clients must be different")
         else:
             raise ValueError("reversal transactions are created through the reversal endpoint")
@@ -58,9 +87,11 @@ class TransactionRead(BaseModel):
     id: int
     type: TransactionType
     amount: Decimal
-    client_id: int | None
-    source_client_id: int | None
-    destination_client_id: int | None
+    currency: Currency
+    transaction_date: date
+    client_ref: str | None
+    source_client_ref: str | None
+    destination_client_ref: str | None
     reversal_of_id: int | None
     idempotency_key: str
     note: str | None
@@ -76,8 +107,10 @@ class BulkTransactionCreate(BaseModel):
 
 
 class BalanceRead(BaseModel):
-    client_id: int
+    client_ref: str
+    currency: Currency
     balance: Decimal
+    as_of: date | None = None
 
 
 class BulkRowResult(BaseModel):
@@ -89,6 +122,9 @@ class BulkRowResult(BaseModel):
 class MonthlyReport(BaseModel):
     year: int
     month: int
+    currency: Currency
+    inflows: Decimal
+    outflows: Decimal
     deposits: Decimal
     withdrawals: Decimal
     fees: Decimal
